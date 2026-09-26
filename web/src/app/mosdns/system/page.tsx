@@ -825,7 +825,7 @@ export default function MosdnsSystemPage() {
             onToggleCache2={() => void toggleCacheStrategy("expiredCache2")}
             onChangeTask={(task: ScheduledTask) => setCacheData((prev) => ({ ...prev, scheduledTask: task }))}
             onSaveTask={saveScheduler}
-            onHotReload={() => void runRoutingAction("start", "热更新已启动")}
+            onHotReload={() => void runRoutingAction("start", "分流记忆已重建")}
             onSaveRules={() => void runRoutingAction("save", "规则已保存")}
             onClearDNSCache={() => void clearDNSCache()}
             onClearGeneratedRules={() => void clearGeneratedRules()}

@@ -3,9 +3,16 @@ plugins:
   - tag: sequence_not_in_list_ipmatch
     type: sequence
     args:
+      - matches: "!rcode 0"
+        exec: exit
+      - matches: "!resp_ip 0.0.0.0/0 2000::/3"
+        exec: exit
       - matches: "resp_ip $direct_ip"            
         exec: fast_mark 24                       #标记上游dns返回了直连ip列表中的ip
-      - matches: fast_mark 24
+      - matches:
+        - fast_mark 24
+        - fast_mark 30
+        - "!fast_mark 11 12"
         exec: $my_realiplist                     #把此域名加入自生成国内域名列表
       - matches:                                 #开启cntomihomo开关后国内域名向mihomo请求fakeip
         - fast_mark 24
@@ -15,9 +22,17 @@ plugins:
         exec: exit
       - matches: "!resp_ip $geoip_cn"            #标记列表外域名上游dns获取了!cn ip
         exec: fast_mark 25
-      - matches: fast_mark 25                    #向sing-box请求fakeip并加入自生成国外域名列表
+      - matches:
+        - fast_mark 25
+        - fast_mark 30
+        - "!fast_mark 11 12"                    #向sing-box请求fakeip并加入自生成国外域名列表
         exec: $sequence_fakeip_addlist
-      - matches: "!fast_mark 25"
+      - matches: fast_mark 25
+        exec: $sequence_fakeip
+      - matches:
+        - "!fast_mark 25"
+        - fast_mark 30
+        - "!fast_mark 11 12"
         exec: $my_realiplist                     #如果获取了cn ip，则加入自生成国内域名列表
       - matches:                                 #开启cntomihomo开关后国内域名向mihomo请求fakeip，否则接受上游ip
         - "!fast_mark 25"                             

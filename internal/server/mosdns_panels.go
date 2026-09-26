@@ -2,6 +2,7 @@ package server
 
 import (
 	"compress/gzip"
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -1105,7 +1106,7 @@ func (a *App) mosDNSRoutingState() map[string]any {
 	return state
 }
 
-func (a *App) generateMosDNSRoutingRules() (map[string]any, error) {
+func (a *App) generateMosDNSRoutingRules(ctx context.Context) (map[string]any, error) {
 	state := defaultMosDNSRoutingState()
 	state["running"] = true
 	state["enabled"] = true
@@ -1113,45 +1114,30 @@ func (a *App) generateMosDNSRoutingRules() (map[string]any, error) {
 	state["progress"] = 10
 	a.storeJSONSetting("mosdns_routing_task", state)
 	entries := a.mosDNSQueryDataset(10000)
-	fakeSet := map[string]bool{}
-	realSet := map[string]bool{}
+	cfg, _ := a.latestSetupConfig()
+	fakeDomains, realDomains := mosDNSLearnedDomains(entries, cfg)
 	counts := map[string]int{}
 	for _, entry := range entries {
-		domain := stringMapValue(entry, "query_name")
-		if domain == "" {
-			continue
+		if domain := stringMapValue(entry, "query_name"); domain != "" {
+			counts[domain]++
 		}
-		counts[domain]++
-		if entryHasFakeIP(entry) {
-			fakeSet[domain] = true
-			continue
-		}
-		realSet[domain] = true
 	}
-	fakeDomains := sortedKeys(fakeSet)
-	realDomains := sortedKeys(realSet)
 	top := topDomainLines(counts, 200)
 	files := map[string][]string{
-		"fakeiprule.txt":  prefixedDomainLines(fakeDomains),
-		"fakeiplist.txt":  fakeDomains,
-		"realiprule.txt":  prefixedDomainLines(realDomains),
-		"realiplist.txt":  realDomains,
+		"fakeiprule.txt":  mosDNSExactRules(fakeDomains),
+		"fakeiplist.txt":  mosDNSLearningLines(fakeDomains, time.Now().Format("2006-01-02")),
+		"realiprule.txt":  mosDNSExactRules(realDomains),
+		"realiplist.txt":  mosDNSLearningLines(realDomains, time.Now().Format("2006-01-02")),
 		"top_domains.txt": top,
 	}
-	for name, lines := range files {
-		rel := filepath.ToSlash(filepath.Join("configs/mosdns/gen", name))
-		content := strings.Join(lines, "\n")
-		if content != "" {
-			content += "\n"
-		}
-		if err := a.writeTextFile(rel, content); err != nil {
-			state["status"] = "failed"
-			state["running"] = false
-			state["error"] = err.Error()
-			a.storeJSONSetting("mosdns_routing_task", state)
-			return state, err
-		}
+	if err := a.replaceMosDNSLearningFiles(ctx, files); err != nil {
+		state["running"] = false
+		state["status"] = "failed"
+		state["error"] = err.Error()
+		a.storeJSONSetting("mosdns_routing_task", state)
+		return state, err
 	}
+
 	state["running"] = false
 	state["status"] = "completed"
 	state["progress"] = 100

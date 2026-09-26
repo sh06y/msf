@@ -1793,7 +1793,7 @@ func TestMosDNSRoutingTaskGeneratesRuleFiles(t *testing.T) {
 	app.setSetting("mosdns_api_endpoint", api.URL)
 	lines := strings.Join([]string{
 		`{"query_name":"fake.example","client_ip":"192.168.10.2","query_type":"A","domain_set":"my_fakeiprule","response_code":"NOERROR","answers":["A: 28.0.0.9"]}`,
-		`client_ip=192.168.10.3 query_name=real.example qtype=A rule=unmatched_rule rcode=NOERROR A: 223.5.5.5`,
+		`client_ip=192.168.10.3 query_name=real.example qtype=A rule=whitelist rcode=NOERROR A: 223.5.5.5`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(filepath.Join(app.DataDir, "logs/mosdns.out.log"), []byte(lines), 0644); err != nil {
 		t.Fatal(err)
@@ -1810,7 +1810,7 @@ func TestMosDNSRoutingTaskGeneratesRuleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(fakeRules), "domain:fake.example") || !strings.Contains(string(realRules), "domain:real.example") {
+	if !strings.Contains(string(fakeRules), "full:fake.example") || !strings.Contains(string(realRules), "full:real.example") {
 		t.Fatalf("routing files mismatch fake=%s real=%s", string(fakeRules), string(realRules))
 	}
 }

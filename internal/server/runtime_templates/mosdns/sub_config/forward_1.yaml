@@ -116,7 +116,11 @@ plugins:
           - $sequence_google
           - exit
       - exec: $nocnfake
-      - matches: "!fast_mark 12"       
+      - matches:
+        - "rcode 0"
+        - "resp_ip 0.0.0.0/0 ::/0"
+        - "fast_mark 30"
+        - "!fast_mark 11 12 13 14 15 16"
         exec: $my_fakeiplist     #加入自生成国外域名列表
       - exec: exit
 

@@ -146,7 +146,7 @@ func normalizeMosDNSQueryMap(obj map[string]any, index int, raw string) map[stri
 		domainSet = "unmatched_rule"
 	}
 	if responseCode == "" {
-		responseCode = "NOERROR"
+		responseCode = "UNKNOWN"
 	}
 	queryTime := firstString(obj, "query_time", "time", "timestamp", "created_at")
 	if queryTime == "" {
@@ -240,7 +240,7 @@ func parseMosDNSQueryLine(line string, index int) (map[string]any, bool) {
 		domainSet = "unmatched_rule"
 	}
 	if responseCode == "" {
-		responseCode = "NOERROR"
+		responseCode = "UNKNOWN"
 	}
 	queryTime := time.Now().Add(time.Duration(index) * -time.Second).Format(time.RFC3339)
 	return map[string]any{
@@ -645,13 +645,13 @@ func uniqueValues(entries []map[string]any, key string, limit int) []string {
 }
 
 func entryHasFakeIP(entry map[string]any) bool {
-	for _, ans := range anySlice(entry["answers"]) {
-		if strings.Contains(fmt.Sprint(ans), "28.") || strings.Contains(fmt.Sprint(ans), "f2b0:") {
+	prefixes := mosDNSFakeIPPrefixes(SetupConfig{})
+	for _, ip := range mosDNSAnswerIPs(entry) {
+		if mosDNSIsFakeIP(ip, prefixes) {
 			return true
 		}
 	}
-	rule := strings.ToLower(stringMapValue(entry, "domain_set"))
-	return strings.Contains(rule, "fakeip") || strings.Contains(rule, "greylist")
+	return false
 }
 
 func maxInt(a, b int) int {

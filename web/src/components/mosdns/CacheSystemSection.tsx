@@ -418,7 +418,7 @@ function OperationsBar({
               <polyline points="23 4 23 10 17 10" />
               <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
             </svg>
-            开始热更新
+            重建分流记忆
           </GlassButton>
           <GlassButton
             onClick={onSaveRules}
@@ -460,7 +460,7 @@ function OperationsBar({
             <path d="M12 16v-4" /><path d="M12 8h.01" />
           </svg>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            提示：清空 DNS 缓存会同时清除自动学习的 FakeIP 规则，避免旧分流记忆再次命中；清空生成规则会额外清空 RealIP 和高频域名文件。两项操作都不会删除手工规则、订阅、配置或 Mihomo Fake-IP 数据库。
+            提示：清空 DNS 缓存会同时清除自动学习的 FakeIP 规则，避免旧分流记忆再次命中；重建或清空生成规则会重启 MosDNS，并清理相关 DNS 缓存；清空生成规则还会清除 RealIP 和高频域名文件。以上操作均不会删除手工规则、订阅、配置或 Mihomo Fake-IP 数据库。
           </p>
         </div>
       </div>
