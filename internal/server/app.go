@@ -54,6 +54,9 @@ type App struct {
 	monitorMu               sync.Mutex
 	monitorNetworkLast      monitorNetworkSample
 	monitorNetworkCache     map[string]any
+	logSnapshotMu           sync.Mutex
+	logSnapshotEpoch        string
+	logSnapshotRevision     uint64
 	appLogMu                sync.Mutex
 	mihomoTrafficMu         sync.Mutex
 	mihomoTrafficCache      map[string]any

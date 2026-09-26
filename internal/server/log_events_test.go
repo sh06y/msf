@@ -40,7 +40,8 @@ func TestLogEventsBatchMatchesSnapshot(t *testing.T) {
 			t.Fatalf("expected one batch: %s", w.Body.String())
 		}
 		var stream struct {
-			Logs []map[string]any `json:"logs"`
+			Logs   []map[string]any  `json:"logs"`
+			Cursor logSnapshotCursor `json:"cursor"`
 		}
 		body := strings.TrimSpace(strings.SplitN(w.Body.String(), "data: ", 2)[1])
 		if err := json.Unmarshal([]byte(body), &stream); err != nil {
@@ -49,10 +50,14 @@ func TestLogEventsBatchMatchesSnapshot(t *testing.T) {
 		snapshot := httptest.NewRecorder()
 		app.handleLogs(snapshot, req)
 		var full struct {
-			Logs []map[string]any `json:"logs"`
+			Logs   []map[string]any  `json:"logs"`
+			Cursor logSnapshotCursor `json:"cursor"`
 		}
 		if err := json.Unmarshal(snapshot.Body.Bytes(), &full); err != nil {
 			t.Fatal(err)
+		}
+		if stream.Cursor.Epoch == "" || stream.Cursor.Epoch != full.Cursor.Epoch || stream.Cursor.Revision >= full.Cursor.Revision {
+			t.Fatalf("HTTP and SSE must share ordered cursors: %v then %v", stream.Cursor, full.Cursor)
 		}
 		if !reflect.DeepEqual(stream.Logs, full.Logs) {
 			t.Fatalf("SSE rows differ from snapshot")
@@ -62,5 +67,15 @@ func TestLogEventsBatchMatchesSnapshot(t *testing.T) {
 				t.Fatal("missing source", entry["source"])
 			}
 		}
+	}
+}
+
+func TestLogSnapshotEpochAndOrder(t *testing.T) {
+	first, second := newTestApp(t), newTestApp(t)
+	_, a := first.readLogSnapshot("mihomo", 80)
+	_, b := first.readLogSnapshot("mihomo", 1000)
+	_, c := second.readLogSnapshot("mihomo", 80)
+	if a.Epoch == "" || a.Epoch != b.Epoch || a.Revision >= b.Revision || a.Epoch == c.Epoch {
+		t.Fatalf("invalid observation cursors: %v %v %v", a, b, c)
 	}
 }

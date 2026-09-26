@@ -8,15 +8,23 @@ const w = window as any;
 const requests: any[] = [],
   streams: any[] = [],
   errors: string[] = [];
+let revision = 0;
 window.fetch = ((url: string, options: any) =>
   new Promise((resolve) => {
+    const cursor = { epoch: "server-a", revision: ++revision };
     // Deliberately ignore abort when completing responses, to exercise generation guards.
     requests.push({
       url,
       signal: options.signal,
-      resolve: (logs: any[]) =>
+      stallBody: () =>
         resolve(
-          new Response(JSON.stringify({ logs }), {
+          new Response(new ReadableStream(), {
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      resolve: (logs: any[], observed = cursor) =>
+        resolve(
+          new Response(JSON.stringify({ logs, cursor: observed }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }),
@@ -35,8 +43,10 @@ class Stream {
   close() {
     this.closed = true;
   }
-  emit(logs: any[]) {
-    this.handler(new MessageEvent("logs", { data: JSON.stringify({ logs }) }));
+  emit(logs: any[], cursor = { epoch: "server-a", revision: ++revision }) {
+    this.handler(
+      new MessageEvent("logs", { data: JSON.stringify({ logs, cursor }) }),
+    );
   }
 }
 w.EventSource = Stream;

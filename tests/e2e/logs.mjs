@@ -156,6 +156,67 @@ async function checkLogHooks(page, baseURL) {
     await tick();
     check(p.virtual.virtualRows.length > 0, "restored rows");
     check(p.observers === observed, "observer recreated on count");
+    // A delayed initial/replayed SSE tail must not evict a newer HTTP window.
+    const highLoad = p.feed.load();
+    const highRequest = p.requests.at(-1);
+    const full = Array.from({ length: 1000 }, (_, i) => row(String(500 + i)));
+    p.streams.at(-1).emit(
+      Array.from({ length: 80 }, (_, i) => row(String(480 + i))),
+      { epoch: "server-a", revision: 199 },
+    );
+    p.streams.at(-1).emit([row("1500")], { epoch: "server-a", revision: 201 });
+    highRequest.resolve(full, { epoch: "server-a", revision: 200 });
+    await highLoad;
+    await tick();
+    check(
+      p.feed.logs.length === 1000 &&
+        p.feed.logs[0].id === "501" &&
+        p.feed.logs.at(-1).id === "1500",
+      "old SSE rows evicted snapshot rows",
+    );
+    p.streams.at(-1).emit([row("480")], { epoch: "server-a", revision: 198 });
+    await tick();
+    check(
+      p.feed.logs.at(-1).id === "1500",
+      "late stale SSE accepted after snapshot",
+    );
+
+    // A server restart during a request invalidates the previous process response.
+    const oldLoad = p.feed.load();
+    const oldRequest = p.requests.at(-1);
+    p.streams
+      .at(-1)
+      .emit([row("restarted")], { epoch: "server-b", revision: 1 });
+    check(oldRequest.signal.aborted, "restart did not retire old request");
+    p.requests
+      .at(-1)
+      .resolve([row("restarted")], { epoch: "server-b", revision: 2 });
+    await tick();
+    oldRequest.resolve([row("old-process")], {
+      epoch: "server-a",
+      revision: 202,
+    });
+    await oldLoad;
+    await tick();
+    check(
+      p.feed.logs.map((x) => x.id).join(",") === "restarted",
+      "old process snapshot accepted",
+    );
+    const oldStream = p.streams.at(-1);
+    const restartLoad = p.feed.load();
+    p.requests
+      .at(-1)
+      .resolve([row("third-process")], { epoch: "server-c", revision: 1 });
+    await restartLoad;
+    await tick();
+    oldStream.emit([row("old-process")], { epoch: "server-b", revision: 3 });
+    await tick();
+    check(
+      oldStream.closed && p.feed.logs[0].id === "third-process",
+      "old process stream accepted",
+    );
+    summary.observationBoundary =
+      "stale overlapping/non-overlapping observations and both restart orders passed";
     const unmountLoad = p.feed.load();
     const last = p.requests.at(-1);
     p.unmount();
@@ -191,6 +252,7 @@ async function checkLogPage(page, baseURL) {
   await page.addInitScript(() => {
     localStorage.setItem("msf_token", "test");
     window.logStreams = [];
+    window.logRevision = 0;
     window.EventSource = class {
       closed = false;
       constructor(url) {
@@ -205,7 +267,12 @@ async function checkLogPage(page, baseURL) {
       }
       emit(logs) {
         this.callback(
-          new MessageEvent("logs", { data: JSON.stringify({ logs }) }),
+          new MessageEvent("logs", {
+            data: JSON.stringify({
+              logs,
+              cursor: { epoch: "page", revision: ++window.logRevision },
+            }),
+          }),
         );
       }
     };
@@ -224,7 +291,12 @@ async function checkLogPage(page, baseURL) {
       if (route.request().method() === "DELETE") rows = [];
       const query = url.searchParams.get("q") || "";
       const level = url.searchParams.get("level");
+      const cursor = await page.evaluate(() => ({
+        epoch: "page",
+        revision: ++window.logRevision,
+      }));
       body = {
+        cursor,
         logs: rows.filter(
           (row) =>
             row.message.includes(query) &&
@@ -309,6 +381,56 @@ async function checkLogPage(page, baseURL) {
   return "search, Enter, no matches, restore, manual scroll, follow, pause/resume, level, clear passed";
 }
 
+async function checkLogDeadline(browser, baseURL) {
+  for (const phase of ["headers", "body"]) {
+    const page = await browser.newPage();
+    await page.clock.install();
+    await page.route("**/__logs_probe.html", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<!doctype html><div id="probe"></div><script type="module" src="/src/features/logs/testing/logsProbe.ts"></script>',
+      }),
+    );
+    await page.goto(`${baseURL}/__logs_probe.html`);
+    await page.waitForFunction(() => window.probe?.requests.length === 1);
+    if (phase === "body")
+      await page.evaluate(() => window.probe.requests[0].stallBody());
+    await page.clock.runFor(6100);
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        aborted: window.probe.requests[0].signal.aborted,
+        loading: window.probe.feed.loading,
+        errors: window.probe.errors.length,
+      })),
+      { aborted: true, loading: false, errors: 1 },
+    );
+    await page.clock.runFor(2000);
+    assert.equal(await page.evaluate(() => window.probe.requests.length), 2);
+    await page.evaluate(() =>
+      window.probe.requests[1].resolve([{ id: "recovered" }]),
+    );
+    await page.clock.runFor(50);
+    await page.waitForFunction(
+      () =>
+        window.probe.feed.logs[0]?.id === "recovered" &&
+        !window.probe.feed.loading,
+    );
+    if (phase === "headers") {
+      await page.evaluate(() =>
+        window.probe.requests[0].resolve([{ id: "late" }]),
+      );
+      await page.clock.runFor(50);
+      assert.equal(
+        await page.evaluate(() => window.probe.feed.logs[0].id),
+        "recovered",
+      );
+    }
+    await page.evaluate(() => window.probe.unmount());
+    await page.close();
+  }
+  return "stalled headers/body expire; next scheduled poll recovers; late response rejected";
+}
+
 try {
   const baseURL = await startServer();
   browser = await chromium.launch({
@@ -318,7 +440,8 @@ try {
   const hooks = await checkLogHooks(await browser.newPage(), baseURL);
   console.log("Hook checks:", JSON.stringify(hooks));
   const page = await checkLogPage(await browser.newPage(), baseURL);
-  console.log(JSON.stringify({ hooks, page }, null, 2));
+  const deadline = await checkLogDeadline(browser, baseURL);
+  console.log(JSON.stringify({ hooks, page, deadline }, null, 2));
 } finally {
   await browser?.close();
   vite?.kill("SIGTERM");

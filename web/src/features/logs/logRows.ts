@@ -1,5 +1,16 @@
 export const LOG_LIMIT = 1000;
 
+export interface LogCursor {
+  epoch: string;
+  revision: number;
+}
+
+export interface PendingLogRow<T> {
+  id: string;
+  row: T;
+  cursor: LogCursor;
+}
+
 export function mergeLogRows<T extends { id: string }>(
   current: T[],
   incoming: T[],
@@ -20,9 +31,17 @@ export function mergeLogRows<T extends { id: string }>(
 export function reconcileLogSnapshot<T extends { id: string }>(
   current: T[],
   snapshot: T[],
-  pending: T[],
+  pending: PendingLogRow<T>[],
+  cursor: LogCursor,
 ): T[] {
-  const next = mergeLogRows(mergeLogRows<T>([], snapshot), pending);
+  const newer = pending
+    .filter(
+      (item) =>
+        item.cursor.epoch === cursor.epoch &&
+        item.cursor.revision > cursor.revision,
+    )
+    .map((item) => item.row);
+  const next = mergeLogRows(mergeLogRows<T>([], snapshot), newer);
   return current.length === next.length &&
     current.every((row, index) => row.id === next[index].id)
     ? current

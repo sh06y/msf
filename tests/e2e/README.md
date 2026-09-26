@@ -28,3 +28,8 @@ Enter, request cancellation and stale responses, pause/service changes,
 SSE/snapshot overlap, duplicate batches, bounded virtual rows, observer lifetime,
 scrolling, following the latest logs, and clearing logs. `PLAYWRIGHT_CHANNEL=chrome`
 can select an installed Chrome instead of bundled Chromium.
+
+The concurrency checks also cover stale SSE observations outside the snapshot
+window, server restarts in either response order, and query deadlines with both
+stalled headers and stalled response bodies. The browser clock verifies that the
+next scheduled poll recovers and ignores late responses after a timeout.

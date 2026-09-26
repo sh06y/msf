@@ -62,8 +62,8 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
 	enc := json.NewEncoder(w)
-	readRows := func() []map[string]any {
-		rows := a.serviceLogLinesWithSources(service, limit)
+	readRows := func() ([]map[string]any, logSnapshotCursor) {
+		rows, cursor := a.readLogSnapshot(service, limit)
 		entries := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {
 			if strings.TrimSpace(row["line"]) == "" {
@@ -74,15 +74,15 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 			entry["path"] = row["path"]
 			entries = append(entries, entry)
 		}
-		return filterStructuredLogs(entries, r)
+		return filterStructuredLogs(entries, r), cursor
 	}
-	sendRows := func(rows []map[string]any) bool {
+	sendRows := func(rows []map[string]any, cursor logSnapshotCursor) bool {
 		if len(rows) == 0 {
 			return true
 		}
 		fmt.Fprint(w, "event: logs\n")
 		fmt.Fprint(w, "data: ")
-		if err := enc.Encode(map[string]any{"service": service, "logs": rows}); err != nil {
+		if err := enc.Encode(map[string]any{"service": service, "logs": rows, "cursor": cursor}); err != nil {
 			return false
 		}
 		fmt.Fprint(w, "\n")
@@ -91,9 +91,9 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
-	rows := readRows()
+	rows, cursor := readRows()
 	lines := logEventKeys(rows)
-	if !sendRows(rows) {
+	if !sendRows(rows, cursor) {
 		return
 	}
 	ticker := time.NewTicker(1500 * time.Millisecond)
@@ -103,12 +103,12 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			rows := readRows()
+			rows, cursor := readRows()
 			current := logEventKeys(rows)
 			delta := newLogEventLines(lines, current)
 			lines = current
 			if len(delta) > 0 {
-				if !sendRows(rows[len(rows)-len(delta):]) {
+				if !sendRows(rows[len(rows)-len(delta):], cursor) {
 					return
 				}
 				continue

@@ -14,7 +14,7 @@ func (a *App) handleLogs(w http.ResponseWriter, r *http.Request) {
 		service = "msf"
 	}
 	linesLimit := queryInt(r, "lines", 1000)
-	sourceRows := a.serviceLogLinesWithSources(service, linesLimit)
+	sourceRows, cursor := a.readLogSnapshot(service, linesLimit)
 	rawLines := make([]string, 0, len(sourceRows))
 	logs := make([]map[string]any, 0, len(sourceRows))
 	for _, row := range sourceRows {
@@ -46,6 +46,7 @@ func (a *App) handleLogs(w http.ResponseWriter, r *http.Request) {
 		"success":    true,
 		"service":    service,
 		"logs":       paged,
+		"cursor":     cursor,
 		"pagination": pagination(page, pageSize, len(logs)),
 		"stats":      stats,
 		"paths":      a.logPathRows(service),
@@ -157,4 +158,22 @@ func logStats(logs []map[string]any) map[string]any {
 		}
 	}
 	return stats
+}
+
+// Reads share one ordering domain across HTTP snapshots and SSE observations.
+// The lock covers the read, not the delivery of the response.
+type logSnapshotCursor struct {
+	Epoch    string `json:"epoch"`
+	Revision uint64 `json:"revision"`
+}
+
+func (a *App) readLogSnapshot(service string, limit int) ([]map[string]string, logSnapshotCursor) {
+	a.logSnapshotMu.Lock()
+	defer a.logSnapshotMu.Unlock()
+	if a.logSnapshotEpoch == "" {
+		a.logSnapshotEpoch = randomHex(16)
+	}
+	rows := a.serviceLogLinesWithSources(service, limit)
+	a.logSnapshotRevision++
+	return rows, logSnapshotCursor{Epoch: a.logSnapshotEpoch, Revision: a.logSnapshotRevision}
 }
