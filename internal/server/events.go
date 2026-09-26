@@ -62,22 +62,27 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
 	enc := json.NewEncoder(w)
-	sendLine := func(line string) bool {
-		if strings.TrimSpace(line) == "" {
-			return true
+	readRows := func() []map[string]any {
+		rows := a.serviceLogLinesWithSources(service, limit)
+		entries := make([]map[string]any, 0, len(rows))
+		for _, row := range rows {
+			if strings.TrimSpace(row["line"]) == "" {
+				continue
+			}
+			entry := structuredLogLines([]string{row["line"]})[0]
+			entry["source"] = row["source"]
+			entry["path"] = row["path"]
+			entries = append(entries, entry)
 		}
-		display := displayLogLine(line)
-		payload := map[string]any{
-			"service": service,
-			"line":    display,
-			"lines":   []string{display},
-			"logs":    structuredLogLines([]string{line}),
-			"content": display,
-			"raw":     line,
+		return filterStructuredLogs(entries, r)
+	}
+	sendRows := func(rows []map[string]any) bool {
+		if len(rows) == 0 {
+			return true
 		}
 		fmt.Fprint(w, "event: logs\n")
 		fmt.Fprint(w, "data: ")
-		if err := enc.Encode(payload); err != nil {
+		if err := enc.Encode(map[string]any{"service": service, "logs": rows}); err != nil {
 			return false
 		}
 		fmt.Fprint(w, "\n")
@@ -86,16 +91,9 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		return true
 	}
-	sendLines := func(lines []string) bool {
-		for _, line := range lines {
-			if !sendLine(line) {
-				return false
-			}
-		}
-		return true
-	}
-	lines := filterLogLines(a.serviceLogLines(service, limit), r)
-	if !sendLines(lines) {
+	rows := readRows()
+	lines := logEventKeys(rows)
+	if !sendRows(rows) {
 		return
 	}
 	ticker := time.NewTicker(1500 * time.Millisecond)
@@ -105,13 +103,14 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-ticker.C:
-			current := filterLogLines(a.serviceLogLines(service, limit), r)
+			rows := readRows()
+			current := logEventKeys(rows)
 			delta := newLogEventLines(lines, current)
+			lines = current
 			if len(delta) > 0 {
-				if !sendLines(delta) {
+				if !sendRows(rows[len(rows)-len(delta):]) {
 					return
 				}
-				lines = current
 				continue
 			}
 			fmt.Fprint(w, ": heartbeat\n\n")
@@ -120,6 +119,14 @@ func (a *App) handleLogEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func logEventKeys(rows []map[string]any) []string {
+	keys := make([]string, len(rows))
+	for i, row := range rows {
+		keys[i] = fmtAny(row["source"]) + "\x00" + fmtAny(row["raw"])
+	}
+	return keys
 }
 
 func newLogEventLines(previous, current []string) []string {

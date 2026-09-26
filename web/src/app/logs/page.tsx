@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Download, FileCode, FileText, Pause, Play, RefreshCw, Search, ScrollText, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { WorkbenchHeader } from "@/components/layout/WorkbenchHeader";
 import { useToaster, ToastStack } from "@/components/Toaster";
-import { api, apiList } from "@/lib/api";
+import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useLogFeed } from "@/features/logs/useLogFeed";
 import { useVirtualLogRows } from "@/features/logs/useVirtualLogRows";
 
 type Service = "msf" | "mosdns" | "singbox" | "mihomo";
@@ -135,94 +136,26 @@ export default function LogsPage({ initialService }: { initialService?: Service 
   const params = useParams();
   const { toasts, showToast } = useToaster();
   const [service, setService] = useState<Service>(() => initialService || normalizeService(params.service));
-  const [logs, setLogs] = useState<NormalizedLogEntry[]>([]);
-  const [stats, setStats] = useState({ total: 0, error: 0, warn: 0 });
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<"all" | Level>("all");
   const [paused, setPaused] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [followingLatest, setFollowingLatest] = useState(true);
-  const identitySetRef = useRef(new Set<string>());
   const serviceLocked = !!initialService;
 
   useEffect(() => {
     setService(initialService || normalizeService(params.service));
   }, [params.service, initialService]);
 
-  useEffect(() => {
-    identitySetRef.current.clear();
-    setLogs([]);
-    setFollowingLatest(true);
-  }, [service]);
+  useEffect(() => setFollowingLatest(true), [service]);
 
-  const load = useCallback(async () => {
-    if (paused) return;
-    setLoading(true);
-    try {
-      const search = new URLSearchParams({ lines: "1000" });
-      if (level !== "all") search.set("level", level.toLowerCase());
-      if (query.trim()) search.set("q", query.trim());
-      const payload = await api<any>(`/api/v1/logs/${service}?${search}`);
-      const items = apiList<LogEntry>(payload, ["logs", "items", "data"]);
-      const normalized = items.map(normalizeLogEntry);
-      identitySetRef.current = new Set(normalized.map((entry) => entry.id));
-      setLogs(normalized);
-      setStats({
-        total: Number(payload.stats?.total ?? items.length),
-        error: Number(payload.stats?.error ?? 0),
-        warn: Number(payload.stats?.warn ?? 0),
-      });
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [level, paused, query, service, showToast]);
-
-  useEffect(() => {
-    void load();
-    const id = window.setInterval(() => void load(), 8000);
-    return () => window.clearInterval(id);
-  }, [load]);
-
-  useEffect(() => {
-    if (paused) return;
-    const token = window.localStorage.getItem("msf_token") || "";
-    const search = new URLSearchParams({ lines: "80" });
-    if (token) search.set("token", token);
-    if (level !== "all") search.set("level", level.toLowerCase());
-    const source = new EventSource(`/api/v1/events/logs/${service}?${search}`);
-    const onLogs = (event: MessageEvent) => {
-      try {
-        const payload = JSON.parse(event.data);
-        const incoming = apiList<LogEntry>(payload, ["logs", "items", "data"]).map(normalizeLogEntry);
-        if (incoming.length === 0) return;
-        setLogs((current) => {
-          const merged = [...current];
-          for (const item of incoming) {
-            if (!identitySetRef.current.has(item.id)) {
-              identitySetRef.current.add(item.id);
-              merged.push(item);
-            }
-          }
-          const next = merged.slice(-1000);
-          if (next.length !== merged.length) {
-            identitySetRef.current = new Set(next.map((entry) => entry.id));
-          }
-          return next;
-        });
-      } catch {
-        // Ignore malformed stream frames and keep the polling fallback alive.
-      }
-    };
-    source.addEventListener("logs", onLogs as EventListener);
-    return () => source.close();
-  }, [level, paused, service]);
+  const { logs, stats, loading, load } = useLogFeed({
+    service, level, query, paused, normalize: normalizeLogEntry, onError: showToast,
+  });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return logs.filter((entry) => !q || entry.searchText.includes(q));
-  }, [logs, query]);
+    return logs.filter((entry) => (level === "all" || entry.level === level) && (!q || entry.searchText.includes(q)));
+  }, [logs, query, level]);
 
   const {
     containerRef: logContainerRef,
@@ -239,9 +172,10 @@ export default function LogsPage({ initialService }: { initialService?: Service 
     const container = logContainerRef.current;
     if (!container) return;
     const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    setFollowingLatest(distanceFromBottom <= LOG_ROW_HEIGHT * 2);
+    const shouldFollow = distanceFromBottom <= LOG_ROW_HEIGHT * 2;
+    if (shouldFollow !== followingLatest) setFollowingLatest(shouldFollow);
     measureVirtualRows();
-  }, [logContainerRef, measureVirtualRows]);
+  }, [followingLatest, logContainerRef, measureVirtualRows]);
 
   const scrollToLatest = useCallback(() => {
     const container = logContainerRef.current;

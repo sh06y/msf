@@ -14,7 +14,9 @@ export function calculateVirtualLogRange(
 ): VirtualLogRange {
   if (count <= 0 || rowHeight <= 0) return { start: 0, end: 0 };
   const maxScrollTop = Math.max(0, count * rowHeight - viewportHeight);
-  const firstVisible = Math.floor(Math.min(maxScrollTop, Math.max(0, scrollTop)) / rowHeight);
+  const firstVisible = Math.floor(
+    Math.min(maxScrollTop, Math.max(0, scrollTop)) / rowHeight,
+  );
   const visibleCount = Math.ceil(Math.max(0, viewportHeight) / rowHeight);
   const start = Math.max(0, firstVisible - overscan);
   const end = Math.min(count, firstVisible + visibleCount + overscan);
@@ -31,18 +33,35 @@ export function useVirtualLogRows({
   overscan?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ scrollTop: 0, height: 400 });
+  const [viewport, setViewport] = useState({ firstVisible: 0, height: 400 });
+  const measuredViewport = useRef(viewport);
   // Derive indices from the current count during render, before layout effects run.
-  const range = calculateVirtualLogRange(count, viewport.scrollTop, viewport.height, rowHeight, overscan);
+  const range = calculateVirtualLogRange(
+    count,
+    viewport.firstVisible * rowHeight,
+    viewport.height,
+    rowHeight,
+    overscan,
+  );
 
   const measure = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
-    const next = { scrollTop: container.scrollTop, height: container.clientHeight };
-    setViewport((current) =>
-      current.scrollTop === next.scrollTop && current.height === next.height ? current : next,
-    );
-  }, []);
+    const next = {
+      firstVisible: Math.floor(Math.max(0, container.scrollTop) / rowHeight),
+      height: container.clientHeight,
+    };
+    const current = measuredViewport.current;
+    if (
+      current.firstVisible === next.firstVisible &&
+      current.height === next.height
+    )
+      return;
+    measuredViewport.current = next;
+    setViewport(next);
+  }, [rowHeight]);
+
+  useLayoutEffect(measure, [count, measure]);
 
   useLayoutEffect(() => {
     measure();
@@ -51,10 +70,14 @@ export function useVirtualLogRows({
     const observer = new ResizeObserver(measure);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [count, measure]);
+  }, [measure]);
 
   const virtualRows = useMemo(
-    () => Array.from({ length: range.end - range.start }, (_, offset) => range.start + offset),
+    () =>
+      Array.from(
+        { length: range.end - range.start },
+        (_, offset) => range.start + offset,
+      ),
     [range.end, range.start],
   );
 
